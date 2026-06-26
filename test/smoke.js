@@ -50,6 +50,23 @@ console.assert(db.find('nodes', { grp: 'test' }).length === 2, 'transaction 실�
 const stats = db.cacheStats();
 console.assert(stats.size > 0, 'cache stats 실패');
 
+// heatmap
+db.find('nodes', { grp: 'test' }); // miss → hit 패턴 만들기
+db.find('nodes', { grp: 'test' }); // hit
+db.find('nodes', { grp: 'test' }); // hit
+
+const hm = db.heatmap();
+console.assert(hm.global.totalAccess > 0, 'heatmap totalAccess 실패');
+console.assert(hm.global.globalHitRate >= 0 && hm.global.globalHitRate <= 100, 'heatmap hitRate 범위 실패');
+console.assert(hm.byCollection.length > 0, 'heatmap byCollection 실패');
+console.assert(hm.byCollection[0].collection === 'nodes', 'heatmap collection 명 실패');
+console.assert(Array.isArray(hm.keys), 'heatmap keys 실패');
+console.assert(Array.isArray(hm.coldKeys), 'heatmap coldKeys 실패');
+
+// hit이 2번인 키는 miss 1번보다 hit이 많아야 함
+const testEntry = hm.keys.find(k => k.label.includes('grp=test'));
+console.assert(testEntry && testEntry.hits >= 2 && testEntry.misses === 1, 'heatmap hit/miss 카운트 실패');
+
 db.close();
 fs.unlinkSync(DB_PATH);
 

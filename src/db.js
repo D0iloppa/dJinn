@@ -3,6 +3,7 @@
 const SQLite = require('better-sqlite3');
 const { Schema } = require('./schema');
 const { LRUCache } = require('./cache');
+const { HitMap } = require('./hitmap');
 const { queryKey } = require('./hash');
 
 class DJinn {
@@ -12,6 +13,7 @@ class DJinn {
     this.db.pragma('foreign_keys = ON');
     this._collections = new Map();  // name → { schema, indexes }
     this._cache = new LRUCache(options.cacheSize ?? 256);
+    this._hitmap = new HitMap();
     this._stmts = new Map();        // 준비된 statement 재사용
   }
 
@@ -38,9 +40,13 @@ ${cols}
   // 단건 조회
   get(collection, id) {
     const cacheKey = queryKey(collection, { id });
+    const label = `${collection}[id=${id}]`;
     const hit = this._cache.get(cacheKey);
-    if (hit !== undefined) return hit;
-
+    if (hit !== undefined) {
+      this._hitmap.recordHit(cacheKey, label);
+      return hit;
+    }
+    this._hitmap.recordMiss(cacheKey, label);
     const stmt = this._stmt(`SELECT * FROM ${collection} WHERE id = ?`, collection);
     const row = stmt.get(id);
     const result = row ? this._deserialize(collection, row) : null;
@@ -51,9 +57,13 @@ ${cols}
   // 조건 조회 (where: { field: value } 단순 equality)
   find(collection, where = {}) {
     const cacheKey = queryKey(collection, where);
+    const label = `${collection}[${Object.entries(where).map(([k, v]) => `${k}=${v}`).join(',')}]`;
     const hit = this._cache.get(cacheKey);
-    if (hit !== undefined) return hit;
-
+    if (hit !== undefined) {
+      this._hitmap.recordHit(cacheKey, label);
+      return hit;
+    }
+    this._hitmap.recordMiss(cacheKey, label);
     const entries = Object.entries(where);
     const sql = entries.length === 0
       ? `SELECT * FROM ${collection}`
@@ -93,6 +103,23 @@ ${cols}
   cacheStats() {
     return { size: this._cache.size, maxSize: this._cache.maxSize };
   }
+
+  // 히트맵 — 시각화 + 캐싱 참조
+  heatmap() {
+    return {
+      global: {
+        totalHits:    this._hitmap.totalHits,
+        totalMisses:  this._hitmap.totalMisses,
+        totalAccess:  this._hitmap.totalAccess,
+        globalHitRate: this._hitmap.globalHitRate,
+      },
+      byCollection: this._hitmap.byCollection(),
+      keys:         this._hitmap.snapshot(),
+      coldKeys:     this._hitmap.coldKeys(),
+    };
+  }
+
+  resetHeatmap() { this._hitmap.reset(); }
 
   close() {
     this.db.close();
