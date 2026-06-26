@@ -1,0 +1,16 @@
+{
+  "name": "@d0iloppa/djinn",
+  "version": "0.1.0",
+  "description": "Doil's JSON Indexing Node — embedded SQLite layer with schema, LRU cache, and hash-keyed queries",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "keywords": ["sqlite", "embedded", "json", "indexing", "cache"],
+  "author": "D0iloppa",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^9.4.3"
+  }
+}
