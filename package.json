@@ -7,10 +7,17 @@
   "scripts": {
     "test": "node --test test/"
   },
-  "keywords": ["sqlite", "embedded", "json", "indexing", "cache"],
+  "keywords": [
+    "sqlite",
+    "embedded",
+    "json",
+    "indexing",
+    "cache"
+  ],
   "author": "D0iloppa",
   "license": "MIT",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^9.4.3"
   }
 }
