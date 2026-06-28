@@ -85,18 +85,80 @@ db.close();
 
 id로 단건 조회. LRU 캐시 우선.
 
-### `db.find(collection, where?)` → `object[]`
+### `db.find(collection, where?, options?)` → `object[]`
 
-equality 조건 조회. `where`가 없으면 전체 반환.
+equality 조건 조회. `where`가 없으면 전체 반환. `options`로 정렬·페이징을 제어합니다.
 
 ```js
 db.find('pages', { group: 'wiki' });
 db.find('pages'); // all
+
+// 정렬 + 페이징 (모두 optional)
+db.find('pages', { group: 'wiki' }, {
+  orderBy:  'title',   // JSON 경로 ('title', 'props.저자', '$.url' 모두 허용)
+  orderDir: 'asc',     // 'asc' | 'desc' (기본: 'asc')
+  limit:    20,
+  offset:   40,        // 3페이지 (20 * 2)
+});
+```
+
+`where` 값에 `%`가 포함되면 자동으로 LIKE 검색으로 전환됩니다.
+
+```js
+db.find('pages', { title: '%노션%' }); // title LIKE '%노션%'
+```
+
+> 페이징 옵션(`limit`/`offset`)이 있을 때는 캐시를 우회합니다.
+
+### `db.findByIds(collection, ids, options?)` → `object[]`
+
+복수 ID로 한 번에 조회합니다. `WHERE id IN (...)` — primary key B-tree를 활용하며 `find()`와 동일한 정렬·페이징 옵션을 지원합니다.
+
+```js
+const ids = ['abc', 'def', 'ghi'];
+
+db.findByIds('pages', ids);
+
+// 정렬 + 페이징 (모두 optional)
+db.findByIds('pages', ids, {
+  orderBy:  'title',
+  orderDir: 'asc',
+  limit:    10,
+  offset:   0,
+});
+```
+
+edge 타겟 노드처럼 ID 목록을 먼저 구한 뒤 노드를 일괄 조회할 때 유용합니다.
+
+### `db.toCSV(records, columns, getVal?)` → `string`
+
+레코드 배열을 CSV 문자열로 직렬화합니다.
+
+| 파라미터 | 타입 | 설명 |
+|----------|------|------|
+| `records` | `object[]` | `find()` 등으로 가져온 레코드 배열 |
+| `columns` | `string[]` | 포함할 필드 목록. `'field:헤더별칭'` 형식으로 헤더 이름 지정 가능 |
+| `getVal` | `(rec, field) => string` | 커스텀 값 추출 함수 (optional) |
+
+```js
+const records = db.find('pages', { group: 'wiki' }, { orderBy: 'title' });
+
+// 기본 사용
+db.toCSV(records, ['id', 'title', 'url']);
+
+// 헤더 별칭
+db.toCSV(records, ['id:ID', 'title:제목', 'url:링크']);
+
+// 중첩 필드 — 커스텀 resolver로 처리
+db.toCSV(records, ['id', 'title:제목', '저자'], (rec, field) => {
+  if (field in rec) return String(rec[field] ?? '');
+  return String((rec.props || {})[field] ?? ''); // props.저자 등
+});
 ```
 
 ### `db.put(collection, id, doc)` → `id`
 
-삽입 또는 교체. 스키마 검증 후 캐시 무효화.
+삽입 또는 교체. 캐시 무효화.
 
 ### `db.del(collection, id)`
 
