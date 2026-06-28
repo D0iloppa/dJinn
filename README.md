@@ -1,6 +1,6 @@
 # dJinn
 
-**Doil's JSON Indexing Node** — SQLite 기반 임베디드 JSON 스토리지 레이어.
+**Doil's JSON iNdexing Node** — SQLite 기반 임베디드 JSON 스토리지 레이어.
 
 별도 서버 없이 프로세스 내에서 돌아가는 경량 DB 레이어로, B-tree 인덱싱·LRU 캐싱·히트맵을 직접 제어할 수 있습니다. MCP 서버 자동 생성을 지원합니다.
 
