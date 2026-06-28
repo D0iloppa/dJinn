@@ -1,6 +1,6 @@
 {
   "name": "@d0iloppa/djinn",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Doil's JSON Indexing Node — embedded SQLite layer with schema, LRU cache, and hash-keyed queries",
   "main": "src/index.js",
   "type": "commonjs",

@@ -1,89 +1,149 @@
 'use strict';
 
 const SQLite = require('better-sqlite3');
-const { Schema } = require('./schema');
 const { LRUCache } = require('./cache');
 const { HitMap } = require('./hitmap');
 const { queryKey } = require('./hash');
 
+// '$.field' or 'field' → '$.field'
+const toPath = (key) => key.startsWith('$.') ? key : `$.${key}`;
+
+// SQL-safe index name from json path (e.g. '$.grp' → '__grp')
+const pathToIdxSuffix = (path) => path.replace(/[^a-zA-Z0-9]/g, '_');
+
 class DJinn {
   constructor(dbPath, options = {}) {
     this.db = new SQLite(dbPath);
-    this.db.pragma('journal_mode = WAL');  // 동시 읽기 성능
+    this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
-    this._collections = new Map();  // name → { schema, indexes }
+    this._collections = new Map();  // name → { indexes }
     this._cache = new LRUCache(options.cacheSize ?? 256);
     this._hitmap = new HitMap();
-    this._stmts = new Map();        // 준비된 statement 재사용
+    this._stmts = new Map();
   }
 
-  // 컬렉션 등록 (테이블 없으면 생성)
-  define(name, schema, options = {}) {
-    if (!(schema instanceof Schema)) throw new Error('DJinn.define: schema must be a Schema instance');
-    this._collections.set(name, { schema, indexes: options.indexes || [] });
+  // 컬렉션 등록 — 스키마 없음. indexes는 JSON 경로 (e.g. 'grp' or '$.grp')
+  define(name, options = {}) {
+    this._collections.set(name, { indexes: options.indexes || [] });
 
-    const cols = schema.toSQLColumns();
-    const pk = options.primaryKey || 'id';
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS ${name} (
-        ${pk} TEXT PRIMARY KEY,
-${cols}
+        id  TEXT PRIMARY KEY,
+        doc TEXT NOT NULL
       )
     `);
 
     for (const field of (options.indexes || [])) {
-      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_${name}_${field} ON ${name}(${field})`);
+      const path = toPath(field);
+      this.db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_${name}${pathToIdxSuffix(path)} ` +
+        `ON ${name}(json_extract(doc, '${path}'))`
+      );
     }
     return this;
   }
 
-  // 단건 조회
+  // 단건 조회 → { id, ...doc } | null
   get(collection, id) {
+    this._getCollection(collection);
     const cacheKey = queryKey(collection, { id });
     const label = `${collection}[id=${id}]`;
     const hit = this._cache.get(cacheKey);
-    if (hit !== undefined) {
-      this._hitmap.recordHit(cacheKey, label);
-      return hit;
-    }
+    if (hit !== undefined) { this._hitmap.recordHit(cacheKey, label); return hit; }
     this._hitmap.recordMiss(cacheKey, label);
-    const stmt = this._stmt(`SELECT * FROM ${collection} WHERE id = ?`, collection);
-    const row = stmt.get(id);
-    const result = row ? this._deserialize(collection, row) : null;
+
+    const row = this._stmt(`SELECT id, doc FROM ${collection} WHERE id = ?`, `get:${collection}`).get(id);
+    const result = row ? { id: row.id, ...JSON.parse(row.doc) } : null;
     this._cache.set(cacheKey, result);
     return result;
   }
 
-  // 조건 조회 (where: { field: value } 단순 equality)
-  find(collection, where = {}) {
-    const cacheKey = queryKey(collection, where);
-    const label = `${collection}[${Object.entries(where).map(([k, v]) => `${k}=${v}`).join(',')}]`;
+  // 조건 조회 → [{ id, ...doc }]
+  // where 키: 'grp' 또는 '$.grp' 모두 허용. 값에 % 포함 시 LIKE
+  // options: { limit, offset, orderBy, orderDir }
+  //   orderBy: JSON 경로 (예: 'title', 'props.저자') — '$.필드' 형식도 허용
+  //   orderDir: 'asc' | 'desc' (기본 'asc')
+  find(collection, where = {}, options = {}) {
+    this._getCollection(collection);
+    const norm = this._normalizeWhere(where);
+    const { limit, offset, orderBy, orderDir = 'asc' } = options;
+    const optKey = orderBy ? `|ob=${orderBy}:${orderDir}` : '';
+    const pgKey  = (limit != null || offset) ? `|p=${offset ?? 0},${limit ?? '*'}` : '';
+    const cacheKey = queryKey(collection, norm) + optKey + pgKey;
+    const label = `${collection}[${Object.entries(norm).map(([k, v]) => `${k}=${v}`).join(',')}]`;
     const hit = this._cache.get(cacheKey);
-    if (hit !== undefined) {
-      this._hitmap.recordHit(cacheKey, label);
-      return hit;
-    }
+    if (hit !== undefined) { this._hitmap.recordHit(cacheKey, label); return hit; }
     this._hitmap.recordMiss(cacheKey, label);
-    const entries = Object.entries(where);
-    const sql = entries.length === 0
-      ? `SELECT * FROM ${collection}`
-      : `SELECT * FROM ${collection} WHERE ${entries.map(([k]) => `${k} = ?`).join(' AND ')}`;
 
-    const stmt = this._stmt(sql, collection + JSON.stringify(where));
-    const rows = stmt.all(...entries.map(([, v]) => v));
-    const result = rows.map(r => this._deserialize(collection, r));
-    this._cache.set(cacheKey, result);
+    let { sql, vals } = this._buildWhere(`SELECT id, doc FROM ${collection}`, norm);
+    if (orderBy) {
+      const path = toPath(orderBy);
+      sql += ` ORDER BY json_extract(doc, '${path}') COLLATE NOCASE ${orderDir === 'desc' ? 'DESC' : 'ASC'}`;
+    }
+    if (limit  != null) sql += ` LIMIT ${Number(limit)}`;
+    if (offset)         sql += ` OFFSET ${Number(offset)}`;
+
+    const rows = this._stmt(sql, `find:${collection}:${JSON.stringify(norm)}${optKey}${pgKey}`).all(...vals);
+    const result = rows.map(r => ({ id: r.id, ...JSON.parse(r.doc) }));
+    if (!limit && !offset) this._cache.set(cacheKey, result);
     return result;
   }
 
-  // 삽입 (id 필수)
+  // CSV 직렬화 유틸리티
+  // columns: string[] — 'field' 또는 'field:헤더별칭' 형식
+  // getVal: (record, field) => string — 커스텀 값 추출 (기본: record[field])
+  toCSV(records, columns, getVal) {
+    const cols = columns.map(c => {
+      const [field, header] = c.split(':');
+      return { field: field.trim(), header: (header || field).trim() };
+    });
+    const defaultGet = (rec, field) => {
+      if (field === 'id') return rec.id ?? '';
+      const v = rec[field];
+      if (Array.isArray(v)) return v.join(';');
+      return v == null ? '' : String(v);
+    };
+    const resolver = getVal || defaultGet;
+    const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const lines = [
+      cols.map(c => esc(c.header)).join(','),
+      ...records.map(r => cols.map(c => esc(resolver(r, c.field))).join(',')),
+    ];
+    return lines.join('\n');
+  }
+
+  // 복수 ID 조회 — WHERE id IN (...) + 정렬·페이징 지원
+  // options: { orderBy, orderDir, limit, offset } (find()와 동일)
+  findByIds(collection, ids, options = {}) {
+    this._getCollection(collection);
+    if (!ids.length) return [];
+    const { limit, offset, orderBy, orderDir = 'asc' } = options;
+    const placeholders = ids.map(() => '?').join(',');
+    let sql = `SELECT id, doc FROM ${collection} WHERE id IN (${placeholders})`;
+    if (orderBy) {
+      const path = toPath(orderBy);
+      sql += ` ORDER BY json_extract(doc, '${path}') COLLATE NOCASE ${orderDir === 'desc' ? 'DESC' : 'ASC'}`;
+    }
+    if (limit  != null) sql += ` LIMIT ${Number(limit)}`;
+    if (offset)         sql += ` OFFSET ${Number(offset)}`;
+    return this.db.prepare(sql).all(...ids).map(r => ({ id: r.id, ...JSON.parse(r.doc) }));
+  }
+
+  // 카운트 → number
+  count(collection, where = {}) {
+    this._getCollection(collection);
+    const norm = this._normalizeWhere(where);
+    const { sql, vals } = this._buildWhere(`SELECT COUNT(*) AS n FROM ${collection}`, norm);
+    return this._stmt(sql, `count:${collection}:${JSON.stringify(norm)}`).get(...vals).n;
+  }
+
+  // 삽입/교체 — 객체 그대로 JSON.stringify
   put(collection, id, doc) {
-    const { schema } = this._getCollection(collection);
-    const validated = schema.validate(doc);
-    const allFields = { id, ...validated };
-    const keys = Object.keys(allFields);
-    const sql = `INSERT OR REPLACE INTO ${collection} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`;
-    this._stmt(sql, `put:${collection}`).run(...Object.values(allFields));
+    this._getCollection(collection);
+    this._stmt(
+      `INSERT OR REPLACE INTO ${collection} (id, doc) VALUES (?, ?)`,
+      `put:${collection}`
+    ).run(id, JSON.stringify(doc));
     this._cache.invalidatePrefix(collection);
     return id;
   }
@@ -94,23 +154,19 @@ ${cols}
     this._cache.invalidatePrefix(collection);
   }
 
-  // 트랜잭션 (fn 안에서 put/del을 여러 번 호출)
+  // 트랜잭션
   transaction(fn) {
     return this.db.transaction(fn)();
   }
 
-  // 캐시 통계
-  cacheStats() {
-    return { size: this._cache.size, maxSize: this._cache.maxSize };
-  }
+  cacheStats() { return { size: this._cache.size, maxSize: this._cache.maxSize }; }
 
-  // 히트맵 — 시각화 + 캐싱 참조
   heatmap() {
     return {
       global: {
-        totalHits:    this._hitmap.totalHits,
-        totalMisses:  this._hitmap.totalMisses,
-        totalAccess:  this._hitmap.totalAccess,
+        totalHits:     this._hitmap.totalHits,
+        totalMisses:   this._hitmap.totalMisses,
+        totalAccess:   this._hitmap.totalAccess,
         globalHitRate: this._hitmap.globalHitRate,
       },
       byCollection: this._hitmap.byCollection(),
@@ -121,9 +177,7 @@ ${cols}
 
   resetHeatmap() { this._hitmap.reset(); }
 
-  close() {
-    this.db.close();
-  }
+  close() { this.db.close(); }
 
   // --- internal ---
 
@@ -133,22 +187,24 @@ ${cols}
     return col;
   }
 
-  // statement 재사용 (prepare 비용 절감)
+  _normalizeWhere(where) {
+    return Object.fromEntries(Object.entries(where).map(([k, v]) => [toPath(k), v]));
+  }
+
+  _buildWhere(base, norm) {
+    const entries = Object.entries(norm);
+    if (!entries.length) return { sql: base, vals: [] };
+    const clause = entries.map(([path, v]) =>
+      String(v).includes('%')
+        ? `json_extract(doc, '${path}') LIKE ?`
+        : `json_extract(doc, '${path}') = ?`
+    ).join(' AND ');
+    return { sql: `${base} WHERE ${clause}`, vals: entries.map(([, v]) => v) };
+  }
+
   _stmt(sql, key) {
     if (!this._stmts.has(key)) this._stmts.set(key, this.db.prepare(sql));
     return this._stmts.get(key);
-  }
-
-  _deserialize(collection, row) {
-    const { schema } = this._getCollection(collection);
-    const out = { ...row };
-    for (const [name, def] of Object.entries(schema.fields)) {
-      if (def.type === 'json' && typeof out[name] === 'string') {
-        try { out[name] = JSON.parse(out[name]); } catch { /* 그대로 */ }
-      }
-      if (def.type === 'boolean') out[name] = Boolean(out[name]);
-    }
-    return out;
   }
 }
 
