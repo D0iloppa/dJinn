@@ -21,11 +21,37 @@
 
 ---
 
-## Quick Start
+## Installation
+
+현재 npm 미등록 패키지입니다. `npm pack`으로 빌드한 tgz를 로컬에서 참조합니다.
 
 ```bash
-npm install @d0iloppa/djinn
+# 1. dJinn 레포에서 패키지 빌드
+git clone https://github.com/D0iloppa/dJinn.git
+cd dJinn
+npm pack
+# → d0iloppa-djinn-x.x.x.tgz 생성
+
+# 2. 사용할 프로젝트에서 로컬 tgz로 설치
+cp d0iloppa-djinn-x.x.x.tgz /path/to/your-project/
+cd /path/to/your-project
+npm install ./d0iloppa-djinn-x.x.x.tgz
 ```
+
+```json
+// package.json
+{
+  "dependencies": {
+    "@d0iloppa/djinn": "file:./d0iloppa-djinn-x.x.x.tgz"
+  }
+}
+```
+
+> npm 등록 후에는 `npm install @d0iloppa/djinn`으로 설치 가능합니다.
+
+---
+
+## Quick Start
 
 ```js
 const { DJinn, Schema } = require('@d0iloppa/djinn');
