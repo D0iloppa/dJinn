@@ -5,7 +5,7 @@ const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio
 const { z } = require('zod');
 
 // DJinn 인스턴스 → MCP 서버
-// 등록된 컬렉션마다 get/find/put/del 툴을 자동 생성
+// 등록된 컬렉션마다 get/find/put/del/count 툴을 자동 생성
 function createMcpServer(djinn, options = {}) {
   const name    = options.name    || 'djinn';
   const version = options.version || '0.1.0';
@@ -61,8 +61,8 @@ function createMcpServer(djinn, options = {}) {
 
     server.tool(
       `djinn_find_${C}`,
-      `Find documents in '${C}'. Pass where as JSON string (e.g. {"grp":"root"}) or empty for all`,
-      { where: z.string().optional().describe('JSON object of field=value filters') },
+      `Find documents in '${C}'. Pass where as JSON string (e.g. {"grp":"root"}) or omit for all. Values with % use LIKE (e.g. {"title":"%HBM%"}).`,
+      { where: z.string().optional().describe('JSON object of field=value filters (e.g. {"grp":"root"} or {"title":"%HBM%"} for LIKE)') },
       async ({ where }) => {
         let filter = {};
         if (where) { try { filter = JSON.parse(where); } catch { return { content: [{ type: 'text', text: 'Error: where must be valid JSON' }] }; } }
@@ -97,6 +97,18 @@ function createMcpServer(djinn, options = {}) {
       async ({ id }) => {
         djinn.del(C, id);
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, id }) }] };
+      }
+    );
+
+    server.tool(
+      `djinn_count_${C}`,
+      `Count documents in '${C}'. Pass where as JSON string (e.g. {"source":"nodeId"}) or omit for total count.`,
+      { where: z.string().optional().describe('JSON object of field=value filters (e.g. {"grp":"root"}); omit for total count') },
+      async ({ where }) => {
+        let filter = {};
+        if (where) { try { filter = JSON.parse(where); } catch { return { content: [{ type: 'text', text: 'Error: where must be valid JSON' }] }; } }
+        const n = djinn.count(C, filter);
+        return { content: [{ type: 'text', text: JSON.stringify({ count: n, collection: C, where: filter }) }] };
       }
     );
   }

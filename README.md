@@ -215,9 +215,12 @@ serveMcp(db, { name: 'djinn', version: '0.1.0' });
 
 ## Design Philosophy
 
+> 기능 추가 / 구조 변경 전 반드시 **[INTENT.md](./INTENT.md)** 를 먼저 읽을 것.
+
+- **JSON 문서 스토어**: `{id, doc TEXT}` 두 컬럼 고정. 새 필드는 컬럼이 아니라 `doc` 안에 넣는다.
 - **임베디드**: 별도 서버 없이 프로세스 내 동작. SQLite가 B-tree와 ACID를 책임진다.
 - **계층 분리**: 스토리지(SQLite) / 캐싱(LRU) / 관측(HitMap) / 인터페이스(MCP) 각자의 역할.
-- **최소 추상화**: JSON 파일 하나를 다루는 것에서 출발. 필요한 만큼만 복잡해진다.
+- **스키마 없음**: 타입 강제, required 검증, ALTER TABLE — DJinn의 역할이 아니다.
 
 ---
 
