@@ -1,6 +1,6 @@
 'use strict';
 
-const { DJinn, Schema } = require('../src/index');
+const { DJinn } = require('../src/index');
 const path = require('path');
 const fs = require('fs');
 
@@ -9,14 +9,7 @@ if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH);
 
 const db = new DJinn(DB_PATH, { cacheSize: 32 });
 
-const nodeSchema = new Schema({
-  title:  { type: 'string',  required: true },
-  grp:    { type: 'string',  required: true },
-  url:    { type: 'string',  required: false },
-  tags:   { type: 'json',    required: false, default: [] },
-});
-
-db.define('nodes', nodeSchema, { indexes: ['grp'] });
+db.define('nodes', { indexes: ['grp'] });
 
 // put
 db.put('nodes', 'abc123', { title: 'DOYCLOPEDIA', grp: 'root', url: 'https://notion.so/abc123', tags: [] });
