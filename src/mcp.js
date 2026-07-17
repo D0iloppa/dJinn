@@ -113,6 +113,79 @@ function createMcpServer(djinn, options = {}) {
     );
   }
 
+  // --- vec 툴 (VecDriver.attach() 호출 시 자동 등록) ---
+
+  if (djinn._vec) {
+    const vec = djinn._vec;
+
+    for (const col of vec._defined) {
+      const C = col;
+
+      server.tool(
+        `vec_upsert_${C}`,
+        `Store an embedding vector for a document in '${C}'. embedding is a JSON float array.`,
+        {
+          id:        z.string().describe('Document id (must exist in collection)'),
+          embedding: z.string().describe('Float array as JSON, e.g. [0.1, 0.2, ...]'),
+        },
+        async ({ id, embedding: embStr }) => {
+          let emb;
+          try { emb = JSON.parse(embStr); } catch { return { content: [{ type: 'text', text: 'Error: embedding must be a JSON float array' }] }; }
+          if (!Array.isArray(emb)) return { content: [{ type: 'text', text: 'Error: embedding must be an array' }] };
+          try {
+            vec.upsert(C, id, emb);
+            return { content: [{ type: 'text', text: JSON.stringify({ ok: true, id, dim: emb.length }) }] };
+          } catch (e) {
+            return { content: [{ type: 'text', text: `Error: ${e.message}` }] };
+          }
+        }
+      );
+
+      server.tool(
+        `vec_search_${C}`,
+        `k-nearest neighbor search in '${C}' by embedding similarity. Returns [{id, distance}] sorted by distance ascending.`,
+        {
+          embedding: z.string().describe('Query float array as JSON, e.g. [0.1, 0.2, ...]'),
+          k:         z.number().int().min(1).max(100).optional().describe('Number of results (default 10)'),
+        },
+        async ({ embedding: embStr, k = 10 }) => {
+          let emb;
+          try { emb = JSON.parse(embStr); } catch { return { content: [{ type: 'text', text: 'Error: embedding must be a JSON float array' }] }; }
+          try {
+            const results = vec.search(C, emb, k);
+            return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+          } catch (e) {
+            return { content: [{ type: 'text', text: `Error: ${e.message}` }] };
+          }
+        }
+      );
+
+      server.tool(
+        `vec_delete_${C}`,
+        `Remove the stored embedding for a document in '${C}'`,
+        { id: z.string().describe('Document id') },
+        async ({ id }) => {
+          try {
+            vec.delete(C, id);
+            return { content: [{ type: 'text', text: JSON.stringify({ ok: true, id }) }] };
+          } catch (e) {
+            return { content: [{ type: 'text', text: `Error: ${e.message}` }] };
+          }
+        }
+      );
+
+      server.tool(
+        `vec_count_${C}`,
+        `Count indexed vectors in '${C}'`,
+        {},
+        async () => {
+          const n = vec.count(C);
+          return { content: [{ type: 'text', text: JSON.stringify({ count: n, collection: C }) }] };
+        }
+      );
+    }
+  }
+
   return server;
 }
 
