@@ -114,8 +114,11 @@ function createMcpServer(djinn, options = {}) {
   }
 
   // --- vec 툴 (VecDriver.attach() 호출 시 자동 등록) ---
+  // EmbedDriver가 attach된 경우 config/api_key가 없으면(isConfigured()===false) vec_* 툴도
+  // 함께 잠근다 — EmbedDriver 미attach 시(순수 VecDriver 사용자)는 기존 동작 그대로 유지(하위호환).
+  const embedGate = !djinn._embed || djinn._embed.isConfigured();
 
-  if (djinn._vec) {
+  if (djinn._vec && embedGate) {
     const vec = djinn._vec;
 
     for (const col of vec._defined) {
@@ -412,6 +415,71 @@ function createMcpServer(djinn, options = {}) {
           return ok({ count: n, parent_key: parent_key ?? null });
         }
       );
+    }
+  }
+
+  // --- embed 툴 (EmbedDriver.attach() + config/api_key 설정 완료 시에만 등록) ---
+  // config(_sys 네임스페이스)가 없으면 djinn._embed.isConfigured()===false → 이 블록 자체가
+  // 스킵되어 embed_* 툴이 등록조차 되지 않는다(잠금). embedGate는 위 vec 블록과 공유.
+
+  if (djinn._embed && embedGate) {
+    const embed = djinn._embed;
+
+    server.tool(
+      'embed_text',
+      'Embed text into a vector using the configured provider (nvidia/gemini). Single entry point — returns dims + raw vector.',
+      {
+        text: z.string().describe('Text to embed'),
+        id:   z.string().optional().describe('Model entry id (omit for default entry)'),
+      },
+      async ({ text, id }) => {
+        try {
+          const v = await embed.embed(text, { id });
+          return { content: [{ type: 'text', text: JSON.stringify({ dim: v.length, embedding: v }) }] };
+        } catch (e) {
+          return { content: [{ type: 'text', text: `Error: ${e.message}` }] };
+        }
+      }
+    );
+
+    if (djinn._vec) {
+      for (const col of djinn._vec._defined) {
+        const C = col; // 클로저 캡처
+
+        server.tool(
+          `embed_upsert_${C}`,
+          `Embed text and store the resulting vector for a document in '${C}' — one call from text to stored embedding.`,
+          {
+            id:   z.string().describe('Document id (must exist in collection)'),
+            text: z.string().describe('Text to embed and store'),
+          },
+          async ({ id, text }) => {
+            try {
+              const dim = await embed.embedAndUpsert(C, id, text);
+              return { content: [{ type: 'text', text: JSON.stringify({ ok: true, id, dim }) }] };
+            } catch (e) {
+              return { content: [{ type: 'text', text: `Error: ${e.message}` }] };
+            }
+          }
+        );
+
+        server.tool(
+          `embed_search_${C}`,
+          `Embed query text and k-nearest neighbor search in '${C}'. Returns [{id, distance}] sorted by distance ascending.`,
+          {
+            text: z.string().describe('Query text to embed and search with'),
+            k:    z.number().int().min(1).max(100).optional().describe('Number of results (default 10)'),
+          },
+          async ({ text, k = 10 }) => {
+            try {
+              const results = await embed.embedAndSearch(C, text, k);
+              return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+            } catch (e) {
+              return { content: [{ type: 'text', text: `Error: ${e.message}` }] };
+            }
+          }
+        );
+      }
     }
   }
 

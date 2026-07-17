@@ -7,5 +7,6 @@ const { fnv1a, queryKey, contentHash } = require('./hash');
 const { createMcpServer, serveMcp } = require('./mcp');
 const { VecDriver } = require('./vec');
 const { GraphDriver } = require('./graph');
+const { EmbedDriver } = require('./embed');
 
-module.exports = { DJinn, LRUCache, HitMap, fnv1a, queryKey, contentHash, createMcpServer, serveMcp, VecDriver, GraphDriver };
+module.exports = { DJinn, LRUCache, HitMap, fnv1a, queryKey, contentHash, createMcpServer, serveMcp, VecDriver, GraphDriver, EmbedDriver };

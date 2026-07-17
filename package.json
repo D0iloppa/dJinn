@@ -4,6 +4,9 @@
   "description": "Doil's JSON Indexing Node — embedded SQLite layer with schema, LRU cache, and hash-keyed queries",
   "main": "src/index.js",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "test": "node --test test/"
   },
