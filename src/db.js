@@ -23,6 +23,8 @@ class DJinn {
   }
 
   // 컬렉션 등록 — 스키마 없음. indexes는 JSON 경로 (e.g. 'grp' or '$.grp')
+  // 항목이 배열이면 복합 표현식 인덱스 생성 (두 번째 이후 컬럼은 COLLATE NOCASE) —
+  // find()의 'ORDER BY … COLLATE NOCASE'와 콜레이션을 맞춰 인덱스가 정렬에도 쓰이게 한다.
   define(name, options = {}) {
     this._collections.set(name, { indexes: options.indexes || [] });
 
@@ -34,11 +36,24 @@ class DJinn {
     `);
 
     for (const field of (options.indexes || [])) {
-      const path = toPath(field);
-      this.db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_${name}${pathToIdxSuffix(path)} ` +
-        `ON ${name}(json_extract(doc, '${path}'))`
-      );
+      if (Array.isArray(field)) {
+        const paths = field.map(toPath);
+        const idxName = `idx_${name}${paths.map(pathToIdxSuffix).join('')}`;
+        const cols = paths.map((path, i) =>
+          i === 0
+            ? `json_extract(doc, '${path}')`
+            : `json_extract(doc, '${path}') COLLATE NOCASE`
+        ).join(', ');
+        this.db.exec(
+          `CREATE INDEX IF NOT EXISTS ${idxName} ON ${name}(${cols})`
+        );
+      } else {
+        const path = toPath(field);
+        this.db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_${name}${pathToIdxSuffix(path)} ` +
+          `ON ${name}(json_extract(doc, '${path}'))`
+        );
+      }
     }
     return this;
   }
