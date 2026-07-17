@@ -5,6 +5,17 @@
 별도 서버 없이 프로세스 내에서 돌아가는 경량 DB 레이어로, B-tree 인덱싱·LRU 캐싱·히트맵을 직접 제어할 수 있습니다. MCP 서버 자동 생성을 지원합니다.
 
 > *dJinn: 악마같이 좋은 녀석. 램프의 요정이자 중동 신화의 정령.*
+>
+> 현재 버전: **0.2.0**
+
+---
+
+## 두 모드
+
+| 모드 | 설명 |
+|------|------|
+| **legacy** | 아래 `db.define/get/find/put/del` — generic collection API |
+| **graph catalog** (recommended, 0.2.0+) | `GraphDriver` — 루트(카탈로그)→자식(테이블+DDL)→손자(row) 3단 고정 구조. 자세한 내용은 [Graph Catalog](#graph-catalog-recommended) 참고 |
 
 ---
 
@@ -12,12 +23,13 @@
 
 | 기능 | 설명 |
 |------|------|
-| **B-tree+ 인덱싱** | SQLite WAL 모드 + 필드별 인덱스 자동 생성 |
+| **B-tree+ 인덱싱** | SQLite WAL 모드 + 필드별 인덱스 자동 생성 (복합 표현식 인덱스 포함) |
 | **LRU 캐싱** | doubly linked list + Map 기반 O(1) get/put/evict |
 | **자체 해시함수** | FNV-1a (캐시 키) + SHA-256 (콘텐츠 무결성) |
 | **히트맵** | 키/컬렉션별 hit·miss 집계 — 시각화 및 캐시 참조용 |
 | **MCP 서버** | 등록 컬렉션 기반 툴 자동 생성 |
 | **Prepared Statement 재사용** | 쿼리별 statement 캐싱으로 파싱 오버헤드 제거 |
+| **그래프 카탈로그** | `GraphDriver.attach()`로 옵트인하는 3단 고정 구조(SHOW TABLES/테이블+DDL/row) + node_id·parent_id 링크 (0.2.0+) |
 
 ---
 
@@ -233,6 +245,61 @@ new Schema({
 
 ---
 
+## Graph Catalog (recommended)
+
+`VecDriver`와 동일한 attach 패턴의 별도 드라이버입니다 — core `db.js`는 건드리지 않으므로 legacy generic collection API는 완전히 그대로 유지됩니다. raw SQL은 쓰지 않고 `get/find/put/del/count/transaction` 프리미티브만 사용하므로, LRU 캐시·히트맵·`invalidatePrefix`가 자동으로 유지됩니다.
+
+### 3단 고정 구조
+
+```
+루트 노드      = information_schema / SHOW TABLES   (1-row, schems: {node_key: description})
+                 node_id = 1 (고정), parent_id = null
+직계 자식 노드 = 테이블 + DDL                        (node_key, child_schema: {필드명: 설명})
+                 parent_id = 1 (루트)
+손자 노드      = row (실데이터 JSON doc)             (key 주소: "<parent_key>::<child_key>")
+                 parent_id = 소속 노드의 node_id
+```
+
+깊이는 3단으로 고정이며, 임의 깊이 트리나 스키마 validation 엔진은 의도적으로 제외합니다.
+
+### 이중 주소 체계
+
+- **key 주소** — 문자열. 노드는 `node_key`, 손자는 `parent_key::child_key`(테이블 PK). 사람/LLM이 부르는 이름.
+- **id 링크** — 정수. 전 계층이 `node_id`/`parent_id`를 보유합니다. 발급 후 불변·재사용 없음 — 링크를 따라 트리 순회가 가능합니다.
+
+두 축은 병행 유지됩니다 — 테이블 PK는 key 주소 그대로이고, node_id는 doc 필드 + 표현식 인덱스로 조회합니다.
+
+### 사용 예
+
+```js
+const { DJinn, GraphDriver } = require('@d0iloppa/djinn');
+
+const db = new DJinn('./mydata.db');
+const graph = GraphDriver.attach(db);
+
+// 골격 정의 + 시드 (멱등 — 서버 시작마다 호출해도 안전, 기존 노드는 건드리지 않음)
+graph.define('echo', {
+  nodes: [
+    { key: 'tone',  description: '말투 기본 톤', child_schema: { base: '기본 톤' } },
+    { key: 'emoji', description: '이모지 사용',   child_schema: { graphic_emoji: '이모지 여부' } },
+  ],
+});
+
+// 손자(row) upsert — 부모 노드가 미리 있어야 함(엄격 모드). 반환에 node_id 포함
+const { node_id } = graph.putDoc('echo', 'tone', 'tone', { base: '반말' });
+
+graph.getDoc('echo', 'tone', 'tone');       // point lookup(캐시 경유) → { data, node_id, parent_id, ... }
+graph.getByNodeId('echo', node_id);         // { level: 'doc', parent_id, ... } — id 링크로 계층 무관 조회
+graph.childrenOf('echo', 1);                // 루트의 직계 = 등록된 노드 전부 (parent_id 링크 순회)
+graph.listDocs('echo', 'tone', { keysOnly: true }); // child_key 오름차순, 데이터 없이 키만
+```
+
+`putNode`/`delNode`(cascade 옵션 지원)로 노드(테이블) CRUD, `countDocs`/`delDoc`으로 손자 카운트·삭제도 가능합니다.
+
+> 물리 스키마, 인덱스 전략, node_id 시퀀스 할당, MCP 에러 케이스 등 전체 명세는 **[docs/graph-catalog-design.md](./docs/graph-catalog-design.md)** 참고.
+
+---
+
 ## Hash Utilities
 
 ```js
@@ -261,6 +328,24 @@ dJinn은 등록된 컬렉션을 기반으로 MCP 툴을 자동 생성합니다.
 | `djinn_del_{collection}` | 삭제 |
 
 공통 툴: `djinn_collections`, `djinn_heatmap`, `djinn_cache_stats`
+
+### Graph Catalog 자동 생성 툴
+
+`GraphDriver.attach(db)` 후 `graph.define(ns, ...)`을 호출한 네임스페이스마다 다음 9개 툴이 생성됩니다 (`createMcpServer()` 호출 시점에 등록되는 네임스페이스가 고정되므로 `define()`을 모두 마친 뒤 서버를 생성해야 합니다):
+
+| 툴 이름 | 설명 |
+|---------|------|
+| `graph_catalog_{ns}` | 루트 조회 = SHOW TABLES |
+| `graph_node_put_{ns}` | 노드 upsert = CREATE/ALTER TABLE (반환에 `node_id` 포함) |
+| `graph_node_get_{ns}` | 노드 조회 — `key` 또는 `node_id` 중 정확히 하나로 주소지정 |
+| `graph_node_del_{ns}` | 노드 삭제 = DROP TABLE — 손자가 있으면 `cascade:true` 필요 |
+| `graph_doc_put_{ns}` | 손자(row) upsert — 부모 노드가 미리 있어야 함 (반환에 `node_id` 포함) |
+| `graph_doc_get_{ns}` | 손자 point lookup — `parent_key`+`child_key` 또는 `node_id` |
+| `graph_doc_list_{ns}` | 손자/자식 노드 목록 — `parent_key` 또는 `parent_id`(1 = 루트 → 노드 목록) |
+| `graph_doc_del_{ns}` | 손자 삭제 (멱등) |
+| `graph_doc_count_{ns}` | 손자 카운트 |
+
+`graph.define(ns)`가 내부적으로 `db.define()`도 호출하므로 `${ns}_root`/`${ns}_nodes`/`${ns}_docs` 컬렉션에 대한 `djinn_get_*`/`djinn_put_*` 등 generic 툴도 함께 생성됩니다 — 이는 legacy 탈출구로 의도적으로 남긴 것이며, 의미론적 조작(스키마 동기화 등)은 `graph_*` 툴을 사용해야 합니다.
 
 ### 사용 예시
 
