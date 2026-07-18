@@ -70,14 +70,19 @@ class EmbedDriver {
   // config/api_key 설정 완료 여부 — mcp.js가 등록 시점에 동기 호출하므로 반드시 동기 유지
   // (GraphDriver 읽기는 전부 동기). defineConfig() 호출 전(=_sys 네임스페이스 미정의)에도
   // 안전하게 false를 반환해야 하므로 미정의 컬렉션 조회 에러를 여기서 흡수한다.
+  // "키가 설정된 엔트리가 하나라도 있으면" 설정 완료로 본다 — 기본(첫) 엔트리에 키가
+  // 없어도 다른 엔트리가 완전하면 툴을 잠그지 않는다. 엔트리별 키 부재는 embed()가
+  // 호출 시점에 다시 검증한다(이중 잠금).
   isConfigured() {
     this._assertGraph();
     try {
       if (!this._djinn._graph.getNode('_sys', 'config')) return false;
-      const entry = this.getEntry();
-      if (!entry) return false;
-      const key = this.getApiKey(entry.id);
-      return typeof key === 'string' && key.length > 0;
+      const entries = this.getModels();
+      if (!entries || entries.length === 0) return false;
+      return entries.some((e) => {
+        const key = this.getApiKey(e.id);
+        return typeof key === 'string' && key.length > 0;
+      });
     } catch {
       return false;
     }

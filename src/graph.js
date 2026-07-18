@@ -107,6 +107,7 @@ class GraphDriver {
         modified_at: now,
       });
       const root = this._djinn.get(`${ns}_root`, 'root');
+      if (!root) this._throwUndefined(ns);
       const schems = { ...root.schems, [key]: description ?? root.schems[key] ?? key };
       this._djinn.put(`${ns}_root`, 'root', { ...root, schems, modified_at: now });
       return { node_key: key, node_id: nodeId };
@@ -260,9 +261,14 @@ class GraphDriver {
   // [v2] 시퀀스 증가 — 반드시 호출측 transaction 내부에서 사용
   _nextId(ns) {
     const row = this._djinn.get(`${ns}_root`, 'seq');
+    if (!row) this._throwUndefined(ns);
     const next = row.seq + 1;
     this._djinn.put(`${ns}_root`, 'seq', { seq: next });
     return next;
+  }
+
+  _throwUndefined(ns) {
+    throw new Error(`GraphDriver: namespace '${ns}' not defined — call define() first`);
   }
 
   _assertKey(key) {

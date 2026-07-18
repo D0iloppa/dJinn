@@ -5,8 +5,19 @@ const { LRUCache } = require('./cache');
 const { HitMap } = require('./hitmap');
 const { queryKey } = require('./hash');
 
-// '$.field' or 'field' → '$.field'
-const toPath = (key) => key.startsWith('$.') ? key : `$.${key}`;
+// 식별자(테이블/컬렉션 이름) — SQL에 보간되므로 반드시 검증
+const NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+// JSON 경로 — where 키·orderBy·인덱스 경로가 전부 SQL 문자열에 보간되므로
+// 유니코드 문자/숫자/언더스코어 세그먼트만 허용 (SQL 인젝션 차단)
+const PATH_RE = /^\$(\.[\p{L}\p{N}_]+)+$/u;
+
+// '$.field' or 'field' → '$.field' (검증 포함)
+const toPath = (key) => {
+  const path = String(key).startsWith('$.') ? String(key) : `$.${key}`;
+  if (!PATH_RE.test(path)) throw new Error(`DJinn: invalid JSON path '${key}'`);
+  return path;
+};
 
 // SQL-safe index name from json path (e.g. '$.grp' → '__grp')
 const pathToIdxSuffix = (path) => path.replace(/[^a-zA-Z0-9]/g, '_');
@@ -26,6 +37,7 @@ class DJinn {
   // 항목이 배열이면 복합 표현식 인덱스 생성 (두 번째 이후 컬럼은 COLLATE NOCASE) —
   // find()의 'ORDER BY … COLLATE NOCASE'와 콜레이션을 맞춰 인덱스가 정렬에도 쓰이게 한다.
   define(name, options = {}) {
+    if (!NAME_RE.test(name)) throw new Error(`DJinn: invalid collection name '${name}'`);
     this._collections.set(name, { indexes: options.indexes || [] });
 
     this.db.exec(`
@@ -90,7 +102,7 @@ class DJinn {
     if (hit !== undefined) { this._hitmap.recordHit(cacheKey, label); return hit; }
     this._hitmap.recordMiss(cacheKey, label);
 
-    let { sql, vals } = this._buildWhere(`SELECT id, doc FROM ${collection}`, norm);
+    let { sql, vals, shape } = this._buildWhere(`SELECT id, doc FROM ${collection}`, norm);
     if (orderBy) {
       const path = toPath(orderBy);
       sql += ` ORDER BY json_extract(doc, '${path}') COLLATE NOCASE ${orderDir === 'desc' ? 'DESC' : 'ASC'}`;
@@ -98,7 +110,7 @@ class DJinn {
     if (limit  != null) sql += ` LIMIT ${Number(limit)}`;
     if (offset)         sql += ` OFFSET ${Number(offset)}`;
 
-    const rows = this._stmt(sql, `find:${collection}:${JSON.stringify(norm)}${optKey}${pgKey}`).all(...vals);
+    const rows = this._stmt(sql, `find:${collection}:${shape}${optKey}${pgKey}`).all(...vals);
     const result = rows.map(r => ({ id: r.id, ...JSON.parse(r.doc) }));
     if (!limit && !offset) this._cache.set(cacheKey, result);
     return result;
@@ -148,8 +160,8 @@ class DJinn {
   count(collection, where = {}) {
     this._getCollection(collection);
     const norm = this._normalizeWhere(where);
-    const { sql, vals } = this._buildWhere(`SELECT COUNT(*) AS n FROM ${collection}`, norm);
-    return this._stmt(sql, `count:${collection}:${JSON.stringify(norm)}`).get(...vals).n;
+    const { sql, vals, shape } = this._buildWhere(`SELECT COUNT(*) AS n FROM ${collection}`, norm);
+    return this._stmt(sql, `count:${collection}:${shape}`).get(...vals).n;
   }
 
   // 삽입/교체 — 객체 그대로 JSON.stringify
@@ -206,15 +218,18 @@ class DJinn {
     return Object.fromEntries(Object.entries(where).map(([k, v]) => [toPath(k), v]));
   }
 
+  // shape: 경로+연산자만으로 구성한 SQL 형태 키 — 값은 ?로 바인딩되어 SQL에 영향이 없으므로
+  // statement 캐시 키에서 제외한다(값 포함 시 distinct 값마다 statement가 무한 누적).
   _buildWhere(base, norm) {
     const entries = Object.entries(norm);
-    if (!entries.length) return { sql: base, vals: [] };
+    if (!entries.length) return { sql: base, vals: [], shape: '' };
     const clause = entries.map(([path, v]) =>
       String(v).includes('%')
         ? `json_extract(doc, '${path}') LIKE ?`
         : `json_extract(doc, '${path}') = ?`
     ).join(' AND ');
-    return { sql: `${base} WHERE ${clause}`, vals: entries.map(([, v]) => v) };
+    const shape = entries.map(([path, v]) => path + (String(v).includes('%') ? '~' : '=')).join(',');
+    return { sql: `${base} WHERE ${clause}`, vals: entries.map(([, v]) => v), shape };
   }
 
   _stmt(sql, key) {

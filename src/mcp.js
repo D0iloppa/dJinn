@@ -12,8 +12,12 @@ function createMcpServer(djinn, options = {}) {
 
   const server = new McpServer({ name, version });
 
-  // 등록된 컬렉션 목록
-  const collections = [...djinn._collections.keys()];
+  // '_' prefix는 내부(hidden) 예약 — EmbedDriver의 '_sys' 네임스페이스(API 키 저장소) 등이
+  // MCP 툴로 노출되지 않도록 컬렉션/네임스페이스/vec 컬렉션 전 경로에서 제외한다.
+  const isInternal = (name) => name.startsWith('_');
+
+  // 등록된 컬렉션 목록 (내부 컬렉션 제외)
+  const collections = [...djinn._collections.keys()].filter((c) => !isInternal(c));
 
   // --- 공통 툴 ---
 
@@ -66,8 +70,12 @@ function createMcpServer(djinn, options = {}) {
       async ({ where }) => {
         let filter = {};
         if (where) { try { filter = JSON.parse(where); } catch { return { content: [{ type: 'text', text: 'Error: where must be valid JSON' }] }; } }
-        const docs = djinn.find(C, filter);
-        return { content: [{ type: 'text', text: JSON.stringify(docs, null, 2) }] };
+        try {
+          const docs = djinn.find(C, filter);
+          return { content: [{ type: 'text', text: JSON.stringify(docs, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: 'text', text: `Error: ${e.message}` }] };
+        }
       }
     );
 
@@ -107,8 +115,12 @@ function createMcpServer(djinn, options = {}) {
       async ({ where }) => {
         let filter = {};
         if (where) { try { filter = JSON.parse(where); } catch { return { content: [{ type: 'text', text: 'Error: where must be valid JSON' }] }; } }
-        const n = djinn.count(C, filter);
-        return { content: [{ type: 'text', text: JSON.stringify({ count: n, collection: C, where: filter }) }] };
+        try {
+          const n = djinn.count(C, filter);
+          return { content: [{ type: 'text', text: JSON.stringify({ count: n, collection: C, where: filter }) }] };
+        } catch (e) {
+          return { content: [{ type: 'text', text: `Error: ${e.message}` }] };
+        }
       }
     );
   }
@@ -122,6 +134,7 @@ function createMcpServer(djinn, options = {}) {
     const vec = djinn._vec;
 
     for (const col of vec._defined) {
+      if (isInternal(col)) continue;
       const C = col;
 
       server.tool(
@@ -205,6 +218,7 @@ function createMcpServer(djinn, options = {}) {
       : 'key must not contain "::"';
 
     for (const ns of graph._namespaces) {
+      if (isInternal(ns)) continue; // '_sys' 등 내부 네임스페이스는 툴 미생성
       const NS = ns; // 클로저 캡처
 
       // [v2] key 또는 node_id 중 정확히 하나로 노드를 주소지정 → node_key로 해석.
@@ -444,6 +458,7 @@ function createMcpServer(djinn, options = {}) {
 
     if (djinn._vec) {
       for (const col of djinn._vec._defined) {
+        if (isInternal(col)) continue;
         const C = col; // 클로저 캡처
 
         server.tool(
