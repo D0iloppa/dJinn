@@ -48,6 +48,16 @@ function createMcpServer(djinn, options = {}) {
     })
   );
 
+  server.tool(
+    'djinn_clear_cache',
+    'Clear the LRU query cache — use when another process/connection changed the same DB file directly, so this process stops merging stale reads back on put()',
+    {},
+    async () => {
+      djinn.clearCache();
+      return { content: [{ type: 'text', text: JSON.stringify(djinn.cacheStats(), null, 2) }] };
+    }
+  );
+
   // --- 컬렉션별 자동 생성 툴 ---
 
   for (const col of collections) {

@@ -419,6 +419,10 @@ db.toCSV(records, ['id', 'title:제목', '저자'], (rec, field) => {
 
 ### `db.cacheStats()` → `{ size, maxSize }`
 
+### `db.clearCache()`
+
+LRU 캐시 전체를 비웁니다. `put`/`del`의 `invalidatePrefix`는 "이 프로세스가 직접 쓴" 변경만 알 수 있으므로, 같은 DB 파일을 다른 프로세스/커넥션이 직접 고친 경우(멀티프로세스 공유 DB)에는 이 프로세스의 캐시가 낡은 값을 들고 있다가 이후 조회·병합의 베이스로 쓰일 수 있습니다. 그런 상황이 의심되면 명시적으로 호출해 강제로 다음 조회부터 새로 읽게 합니다.
+
 ### `db.resetHeatmap()`
 
 히트맵 카운터 초기화.
@@ -487,7 +491,7 @@ dJinn은 등록된 컬렉션·네임스페이스를 기반으로 MCP 툴을 자�
 | `djinn_del_{collection}` | 삭제 |
 | `djinn_count_{collection}` | where 조건 카운트 (생략 시 전체) |
 
-공통 툴: `djinn_collections`, `djinn_heatmap`, `djinn_cache_stats`
+공통 툴: `djinn_collections`, `djinn_heatmap`, `djinn_cache_stats`, `djinn_clear_cache`
 
 > `_`로 시작하는 네임스페이스·컬렉션(예: `EmbedDriver`의 `_sys` 설정 저장소)은 내부 예약으로 취급되어 **MCP 툴이 생성되지 않습니다** — API 키 등 내부 설정이 MCP로 노출되지 않도록 하기 위함입니다.
 

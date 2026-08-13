@@ -188,6 +188,12 @@ class DJinn {
 
   cacheStats() { return { size: this._cache.size, maxSize: this._cache.maxSize }; }
 
+  // 프로세스 밖에서(다른 프로세스/커넥션이) 같은 DB 파일을 직접 고쳤을 때 이 캐시가
+  // 낡은 값을 들고 있다가 이후 put()의 merge 베이스로 쓰이면서 외부 변경을 조용히
+  // 되돌리는 사고를 막기 위한 수동 탈출구. put/del의 invalidatePrefix는 "이 프로세스가
+  // 쓴" 쓰기만 알 수 있으므로 외부 변경까지 커버하지 못한다 — 전체 무효화가 유일하게 안전한 범위.
+  clearCache() { this._cache.clear(); }
+
   heatmap() {
     return {
       global: {

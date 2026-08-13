@@ -60,6 +60,13 @@ console.assert(Array.isArray(hm.coldKeys), 'heatmap coldKeys 실패');
 const testEntry = hm.keys.find(k => k.label.includes('grp=test'));
 console.assert(testEntry && testEntry.hits >= 2 && testEntry.misses === 1, 'heatmap hit/miss 카운트 실패');
 
+// clearCache — 외부에서 DB가 바뀌었다고 가정하고 캐시를 강제로 비운 뒤 재조회
+db.get('nodes', 'abc123'); // 캐시에 다시 채움
+console.assert(db.cacheStats().size > 0, 'clearCache 준비 실패');
+db.clearCache();
+console.assert(db.cacheStats().size === 0, 'clearCache 실패');
+console.assert(db.get('nodes', 'abc123').title === 'DOYCLOPEDIA', 'clearCache 이후 재조회 실패');
+
 db.close();
 fs.unlinkSync(DB_PATH);
 
