@@ -8,5 +8,6 @@ const { createMcpServer, serveMcp } = require('./mcp');
 const { VecDriver } = require('./vec');
 const { GraphDriver } = require('./graph');
 const { EmbedDriver } = require('./embed');
+const { SnapshotDriver } = require('./snapshot');
 
-module.exports = { DJinn, LRUCache, HitMap, fnv1a, queryKey, contentHash, createMcpServer, serveMcp, VecDriver, GraphDriver, EmbedDriver };
+module.exports = { DJinn, LRUCache, HitMap, fnv1a, queryKey, contentHash, createMcpServer, serveMcp, VecDriver, GraphDriver, EmbedDriver, SnapshotDriver };

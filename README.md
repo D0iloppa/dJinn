@@ -6,7 +6,7 @@
 
 > *dJinn: 악마같이 좋은 녀석. 램프의 요정이자 중동 신화의 정령.*
 >
-> 현재 버전: **0.2.0**
+> 현재 버전: **0.3.0**
 
 ---
 
@@ -34,6 +34,7 @@ dJinn은 하나의 코어(`db.js`) 위에 두 가지 사용 모드를 제공합�
 | **히트맵** | 키/컬렉션별 hit·miss 집계 — 시각화 및 캐시 참조용 |
 | **벡터 검색** | `VecDriver`로 sqlite-vec 기반 k-NN 임베딩 스토어 (0.2.0+) |
 | **임베딩 파이프라인** | `EmbedDriver`로 provider(nvidia/gemini) 추상화 text→vector 집계 (0.2.0+) |
+| **스냅샷** | `SnapshotDriver`로 DB를 row당 JSON 파일 트리로 export/import — git 공유·백업용 (0.3.0+) |
 | **MCP 서버** | 등록 컬렉션·네임스페이스 기반 툴 자동 생성 |
 | **Prepared Statement 재사용** | 쿼리별 statement 캐싱으로 파싱 오버헤드 제거 |
 
@@ -254,6 +255,44 @@ const results = await embed.embedAndSearch('docs', '인사말', 5);
 ```
 
 `embed.isConfigured()`가 `true`가 되는 순간부터(위 예의 `setApiKey` 호출 이후) `createMcpServer()`/`serveMcp()`가 `embed_*`(및 `vec_*`) 툴을 등록합니다.
+
+---
+
+## SnapshotDriver (0.3.0+)
+
+DB 전체를 **row 하나 = JSON 파일 하나** 텍스트 트리로 내보내고(`exportTo`) 되읽는다(`importFrom`).
+SQLite 바이너리 대신 이 트리를 git에 커밋하면 바뀐 row만 diff로 남고, DB는 스냅샷에서 언제든 재생성 가능한 캐시가 된다.
+
+```js
+const { DJinn, GraphDriver, SnapshotDriver } = require('@d0iloppa/djinn');
+
+const db = new DJinn('./data.db');
+const graph = GraphDriver.attach(db);
+const snap = SnapshotDriver.attach(db);
+
+snap.exportTo('./snapshot', { textFields: { wiki_docs: ['data.body_md'] } });
+// → { collections, rows, written, deleted }  (변경 없으면 written 0)
+
+snap.importFrom('./snapshot');            // 스냅샷 기준으로 DB 동기화 (없는 row는 삭제)
+```
+
+```
+snapshot/
+├─ manifest.json                     { format: 'djinn-snapshot/1', collections: { name: { indexes, count, sharded } } }
+├─ wiki_docs/page%3A%3Apg_1.json     { id, doc, text? }  — 키 정렬·2칸 들여쓰기 (결정론적)
+├─ wiki_docs/page%3A%3Apg_1.0.md     textFields로 분리된 본문
+└─ tickets/3f/T-1~a1b2c3d4.json      shardThreshold(기본 1000) 초과 컬렉션은 해시 2자리 폴더로 샤딩
+```
+
+| 메서드 | 설명 |
+|--------|------|
+| `SnapshotDriver.attach(db)` | attach (`db._snapshot`에도 저장) |
+| `snap.exportTo(dir, { collections?, textFields?, shardThreshold? })` | 내용이 바뀐 파일만 쓰고, 사라진 row의 파일은 지운다 |
+| `snap.importFrom(dir, { collections?, prune? })` | 없는 컬렉션은 manifest의 indexes로 define, 한 트랜잭션으로 upsert, `prune`(기본 true)이면 스냅샷에 없는 row 삭제, 끝나면 캐시 전체 무효화 |
+
+- 대상: `define()`된 컬렉션. `'_'` 접두 컬렉션(API 키 등 내부 설정)과 vec 가상 테이블은 기본 제외.
+- 파일명은 id를 OS 안전하게 인코딩한 것이며 식별용일 뿐이다 — import는 파일 안의 `id`를 쓴다. 대문자가 있거나 긴 id는 해시 접미사로 대소문자 무시 파일시스템 충돌을 피한다.
+- GraphDriver의 `node_id`·`seq`도 그대로 보존된다. 단 `seq` 카운터는 row 하나이므로 **쓰는 곳이 한 곳일 때** 안전하다 (여러 곳에서 각자 쓰고 병합하면 node_id가 겹칠 수 있음).
 
 ---
 
